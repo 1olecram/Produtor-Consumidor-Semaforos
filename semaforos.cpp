@@ -5,12 +5,14 @@
 #include <thread>
 #include <chrono>
 #include <semaphore.h>
+#include <fstream>
 
 int count = 0; // Itens no buffer
 int in = 0;    // Índice de produção
 int out = 0;   // Índice de consumo
 
 std::vector<int> buffer; // Memória compartilhada (buffer)
+std::vector<int> occupancy_log; // Log da ocupação do buffer após cada operação
 
 sem_t sem_empty; // Semáforo contador para posições livres
 sem_t sem_full;  // Semáforo contador para posições ocupadas
@@ -54,15 +56,14 @@ void produtor(int id, int num_itens) {
         sem_wait(&sem_mutex); // Entra na região crítica
 
         buffer[in] = item;
-        // std::cout << "Produtor " << id << " colocou " << item << " na pos " << in << "\n";
-
+         // std::cout << "Produtor " << id << " colocou " << item << " na pos " << in << "\n";
         in = (in + 1) % buffer.size(); // Avança o índice circularmente
         count++;
+        
+        occupancy_log.push_back(count); // Salva log
 
         sem_post(&sem_mutex); // Sai da região crítica
         sem_post(&sem_full);  // Sinaliza nova posição ocupada
-
-        // std::this_thread::sleep_for(std::chrono::milliseconds(400));
     }
 }
 
@@ -72,22 +73,20 @@ void consumidor(int id, int num_itens) {
         sem_wait(&sem_mutex); // Entra na região crítica
 
         int item = buffer[out];
-        // std::cout << "Consumidor " << id << " retirou " << item << " da pos " << out;
-
+        
         // Validando se é primo com a função já definida
-        if (isPrime(item)) {
-            // std::cout << " (É primo!)\n";
+         if (isPrime(item)) {
+            // É primo
         } else {
-            // std::cout << " (Não é primo)\n";
+            // Não é primo
         }
-
         out = (out + 1) % buffer.size(); // Libera a posição logicamente
         count--;
+        
+        occupancy_log.push_back(count); // Salva log
 
         sem_post(&sem_mutex); // Sai da região crítica
         sem_post(&sem_empty); // Sinaliza nova posição livre
-
-        // std::this_thread::sleep_for(std::chrono::milliseconds(800));
     }
 }
 
@@ -112,6 +111,7 @@ int main(int argc, char const *argv[]) {
     }
 
     buffer.resize(N);       // Inicializa o vetor com tamanho N
+    occupancy_log.reserve(2 * M); // Previne realocação durante execução
 
     // Inicialização dos semáforos
     sem_init(&sem_empty, 0, N); // Inicialmente N posições livres
@@ -132,8 +132,26 @@ int main(int argc, char const *argv[]) {
         consumidores.push_back(std::thread(consumidor, i + 1, itens_por_consumidor));
     }
 
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     for (auto& p : produtores) p.join();
     for (auto& c : consumidores) c.join();
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> duration = end_time - start_time;
+    std::cout << "Tempo de execução (" << Np << " produtores, " << Nc << " consumidores): " << duration.count() << " s\n";
+
+    // Salvar log em arquivo
+    std::string filename = "ocupacao_buffer_" + std::to_string(Np) + "p_" + std::to_string(Nc) + "c.csv";
+    std::ofstream out_file(filename);
+    if (out_file.is_open()) {
+        out_file << "Operacao,Ocupacao\n";
+        for (size_t i = 0; i < occupancy_log.size(); ++i) {
+            out_file << i << "," << occupancy_log[i] << "\n";
+        }
+        out_file.close();
+        std::cout << "Log salvo em " << filename << "\n";
+    }
 
     // Destruição dos semáforos
     sem_destroy(&sem_empty);
