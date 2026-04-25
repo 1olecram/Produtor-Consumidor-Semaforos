@@ -35,4 +35,8 @@
 *.out
 *.app
 
+#images and spreadsheet
+*.png
+*.csv
+
 # End of https://www.toptal.com/developers/gitignore/api/c++
