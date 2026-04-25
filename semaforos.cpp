@@ -3,9 +3,8 @@
 #include <random>
 #include <vector>
 #include <thread>
-#include <mutex>
-#include <condition_variable>
 #include <chrono>
+#include <semaphore.h>
 
 int count = 0; // Itens no buffer
 int in = 0;    // Índice de produção
@@ -13,8 +12,9 @@ int out = 0;   // Índice de consumo
 
 std::vector<int> buffer; // Memória compartilhada (buffer)
 
-std::mutex mtx;
-std::condition_variable cv_prod, cv_cons;
+sem_t sem_empty; // Semáforo contador para posições livres
+sem_t sem_full;  // Semáforo contador para posições ocupadas
+sem_t sem_mutex; // Semáforo para exclusão mútua
 
 bool isPrime(int num)
 {
@@ -44,81 +44,101 @@ int numGeneration()
     return distrib(gen); 
 }
 
-void produtor(int id) {
-    while (true) {
-        int item = numGeneration(); // Produz item
-        
-        std::unique_lock<std::mutex> lock(mtx);
+const int M = 1e5;
 
-        // Espera enquanto o vetor estiver cheio
-        cv_prod.wait(lock, [] { return count < static_cast<int>(buffer.size()); });
+void produtor(int id, int num_itens) {
+    for (int i = 0; i < num_itens; ++i) {
+        int item = numGeneration(); // Produz item
+
+        sem_wait(&sem_empty); // Aguarda posição livre
+        sem_wait(&sem_mutex); // Entra na região crítica
 
         buffer[in] = item;
-        std::cout << "Produtor " << id << " colocou " << item << " na pos " << in << "\n";
-        
+        // std::cout << "Produtor " << id << " colocou " << item << " na pos " << in << "\n";
+
         in = (in + 1) % buffer.size(); // Avança o índice circularmente
         count++;
 
-        lock.unlock();
-        cv_cons.notify_one();
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        sem_post(&sem_mutex); // Sai da região crítica
+        sem_post(&sem_full);  // Sinaliza nova posição ocupada
+
+        // std::this_thread::sleep_for(std::chrono::milliseconds(400));
     }
 }
 
-void consumidor(int id) {
-    while (true) {
-        std::unique_lock<std::mutex> lock(mtx);
-
-        // Espera enquanto o vetor estiver vazio
-        cv_cons.wait(lock, [] { return count > 0; });
+void consumidor(int id, int num_itens) {
+    for (int i = 0; i < num_itens; ++i) {
+        sem_wait(&sem_full);  // Aguarda posição ocupada
+        sem_wait(&sem_mutex); // Entra na região crítica
 
         int item = buffer[out];
-        std::cout << "Consumidor " << id << " retirou " << item << " da pos " << out;
-        
+        // std::cout << "Consumidor " << id << " retirou " << item << " da pos " << out;
+
         // Validando se é primo com a função já definida
         if (isPrime(item)) {
-            std::cout << " (É primo!)\n";
+            // std::cout << " (É primo!)\n";
         } else {
-            std::cout << " (Não é primo)\n";
+            // std::cout << " (Não é primo)\n";
         }
-        
+
         out = (out + 1) % buffer.size(); // Libera a posição logicamente
         count--;
 
-        lock.unlock();
-        cv_prod.notify_one();
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        sem_post(&sem_mutex); // Sai da região crítica
+        sem_post(&sem_empty); // Sinaliza nova posição livre
+
+        // std::this_thread::sleep_for(std::chrono::milliseconds(800));
     }
 }
 
 int main(int argc, char const *argv[]) {
-    if (argc < 2) {
-        std::cerr << "Uso: " << argv[0] << " <tamanho_do_buffer>\n";
+    if (argc < 4) {
+        std::cerr << "Uso: " << argv[0] << " <tamanho_do_buffer> <Np> <Nc>\n";
         return 1;
     }
 
-    int N;
+    int N, Np, Nc;
     try {
         N = std::stoi(argv[1]); // Converte argumento para int
-        if (N <= 0) {
-            std::cerr << "Erro: O tamanho do buffer deve ser maior que 0.\n";
+        Np = std::stoi(argv[2]);
+        Nc = std::stoi(argv[3]);
+        if (N <= 0 || Np <= 0 || Nc <= 0) {
+            std::cerr << "Erro: O tamanho do buffer, Np e Nc devem ser maiores que 0.\n";
             return 1;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Erro: Tamanho de buffer inválido fornecido.\n";
+        std::cerr << "Erro: Argumentos invalidos fornecidos.\n";
         return 1;
     }
 
     buffer.resize(N);       // Inicializa o vetor com tamanho N
 
-    // Inicializando as threads de produtor e consumidor
-    std::thread p1(produtor, 1);
-    std::thread c1(consumidor, 1);
+    // Inicialização dos semáforos
+    sem_init(&sem_empty, 0, N); // Inicialmente N posições livres
+    sem_init(&sem_full, 0, 0);  // Inicialmente 0 posições ocupadas
+    sem_init(&sem_mutex, 0, 1); // Mutex inicializado com 1
 
-    p1.join();
-    c1.join();
+    // Inicializando as threads de produtor e consumidor
+    std::vector<std::thread> produtores;
+    std::vector<std::thread> consumidores;
+    
+    int itens_por_produtor = M / Np;
+    int itens_por_consumidor = M / Nc;
+
+    for (int i = 0; i < Np; ++i) {
+        produtores.push_back(std::thread(produtor, i + 1, itens_por_produtor));
+    }
+    for (int i = 0; i < Nc; ++i) {
+        consumidores.push_back(std::thread(consumidor, i + 1, itens_por_consumidor));
+    }
+
+    for (auto& p : produtores) p.join();
+    for (auto& c : consumidores) c.join();
+
+    // Destruição dos semáforos
+    sem_destroy(&sem_empty);
+    sem_destroy(&sem_full);
+    sem_destroy(&sem_mutex);
 
     return 0;
 }
