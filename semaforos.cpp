@@ -6,101 +6,100 @@
 #include <chrono>
 #include <semaphore.h>
 #include <fstream>
+#include <cstdio>
 
 int count = 0; // Itens no buffer
+bool quiet_mode = false; // Flag para suprimir prints de stdout
 int in = 0;    // Índice de produção
 int out = 0;   // Índice de consumo
 
-std::vector<int> buffer; // Memória compartilhada (buffer)
+std::vector<int> buffer;        // Memória compartilhada (buffer)
 std::vector<int> occupancy_log; // Log da ocupação do buffer após cada operação
 
 sem_t sem_empty; // Semáforo contador para posições livres
 sem_t sem_full;  // Semáforo contador para posições ocupadas
 sem_t sem_mutex; // Semáforo para exclusão mútua
 
-bool isPrime(int num)
-{
-    if (num <= 1)
-    {
-        return false;
+const int M = 1e5;
+
+
+bool isPrime(int num) {
+    if (num <= 1) return false;
+    for (int i = 2; i * i <= num; i++) {
+        if (num % i == 0) return false;
     }
-    
-    // Conta os divisores considerando o quadradado do contador -> O(sqrt(n))
-    for (int i = 2; i * i <= num; i++)
-    {
-        if (num % i == 0)
-            return false;
-    }
-    return true; // Se passar por todo o laco, é primo
+    return true;
 }
 
-int numGeneration()
-{   
-    // Seed com fonte de entropia via hardware
-    // Usar thread_local ou static para não inicializar a cada chamada, 
-    // melhorando a performance e gerando entropia correta
+int numGeneration() {   
     static std::random_device rd;
     static std::mt19937 gen(rd());
     std::uniform_int_distribution<> distrib(1, 1e7);
-
     return distrib(gen); 
 }
 
-const int M = 1e5;
-
+//thread produtor
 void produtor(int id, int num_itens) {
     for (int i = 0; i < num_itens; ++i) {
-        int item = numGeneration(); // Produz item
+        int item = numGeneration();
 
-        sem_wait(&sem_empty); // Aguarda posição livre
-        sem_wait(&sem_mutex); // Entra na região crítica
+        sem_wait(&sem_empty);
+        sem_wait(&sem_mutex);
 
         buffer[in] = item;
-         // std::cout << "Produtor " << id << " colocou " << item << " na pos " << in << "\n";
-        in = (in + 1) % buffer.size(); // Avança o índice circularmente
+        in = (in + 1) % buffer.size();
         count++;
         
-        occupancy_log.push_back(count); // Salva log
+        occupancy_log.push_back(count);
 
-        sem_post(&sem_mutex); // Sai da região crítica
-        sem_post(&sem_full);  // Sinaliza nova posição ocupada
+        sem_post(&sem_mutex);
+        sem_post(&sem_full);
     }
 }
 
+//thread consumidor
 void consumidor(int id, int num_itens) {
     for (int i = 0; i < num_itens; ++i) {
-        sem_wait(&sem_full);  // Aguarda posição ocupada
-        sem_wait(&sem_mutex); // Entra na região crítica
+        sem_wait(&sem_full);
+        sem_wait(&sem_mutex);
 
         int item = buffer[out];
+        bool is_p = isPrime(item);
         
-        // Validando se é primo com a função já definida
-         if (isPrime(item)) {
-            // É primo
-        } else {
-            // Não é primo
-        }
-        out = (out + 1) % buffer.size(); // Libera a posição logicamente
+        out = (out + 1) % buffer.size();
         count--;
         
-        occupancy_log.push_back(count); // Salva log
+        occupancy_log.push_back(count);
 
-        sem_post(&sem_mutex); // Sai da região crítica
-        sem_post(&sem_empty); // Sinaliza nova posição livre
+        sem_post(&sem_mutex);
+        sem_post(&sem_empty);
+        
+        if (!quiet_mode) {
+             printf("Consumidor %d verificou o numero %d: %s\n", id, item, is_p ? "eh primo" : "nao eh primo");
+        }
     }
 }
 
 int main(int argc, char const *argv[]) {
-    if (argc < 4) {
-        std::cerr << "Uso: " << argv[0] << " <tamanho_do_buffer> <Np> <Nc>\n";
+    std::vector<std::string> args;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "-q") {
+            quiet_mode = true;
+        } else {
+            args.push_back(argv[i]);
+        }
+    }
+
+    if (args.size() < 3) {
+        std::cerr << "Uso: " << argv[0] << " <tamanho_do_buffer> <Np> <Nc> [arquivo_log.csv] [-q]\n";
         return 1;
     }
 
     int N, Np, Nc;
     try {
-        N = std::stoi(argv[1]); // Converte argumento para int
-        Np = std::stoi(argv[2]);
-        Nc = std::stoi(argv[3]);
+        N = std::stoi(args[0]);
+        Np = std::stoi(args[1]);
+        Nc = std::stoi(args[2]);
         if (N <= 0 || Np <= 0 || Nc <= 0) {
             std::cerr << "Erro: O tamanho do buffer, Np e Nc devem ser maiores que 0.\n";
             return 1;
@@ -110,15 +109,13 @@ int main(int argc, char const *argv[]) {
         return 1;
     }
 
-    buffer.resize(N);       // Inicializa o vetor com tamanho N
-    occupancy_log.reserve(2 * M); // Previne realocação durante execução
+    buffer.resize(N);
+    occupancy_log.reserve(2 * M);
 
-    // Inicialização dos semáforos
-    sem_init(&sem_empty, 0, N); // Inicialmente N posições livres
-    sem_init(&sem_full, 0, 0);  // Inicialmente 0 posições ocupadas
-    sem_init(&sem_mutex, 0, 1); // Mutex inicializado com 1
+    sem_init(&sem_empty, 0, N);
+    sem_init(&sem_full, 0, 0);
+    sem_init(&sem_mutex, 0, 1);
 
-    // Inicializando as threads de produtor e consumidor
     std::vector<std::thread> produtores;
     std::vector<std::thread> consumidores;
     
@@ -139,21 +136,23 @@ int main(int argc, char const *argv[]) {
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> duration = end_time - start_time;
-    std::cout << "Tempo de execução (" << Np << " produtores, " << Nc << " consumidores): " << duration.count() << " s\n";
+    
+    // Imprime apenas o tempo para facilitar coleta automática pelo script
+    std::cout << duration.count() << "\n";
 
-    // Salvar log em arquivo
-    std::string filename = "ocupacao_buffer_" + std::to_string(Np) + "p_" + std::to_string(Nc) + "c.csv";
-    std::ofstream out_file(filename);
-    if (out_file.is_open()) {
-        out_file << "Operacao,Ocupacao\n";
-        for (size_t i = 0; i < occupancy_log.size(); ++i) {
-            out_file << i << "," << occupancy_log[i] << "\n";
+    // Salvar log se um nome de arquivo foi passado como 4o argumento
+    if (args.size() >= 4) {
+        std::string filename = args[3];
+        std::ofstream out_file(filename);
+        if (out_file.is_open()) {
+            out_file << "Operacao,Ocupacao\n";
+            for (size_t i = 0; i < occupancy_log.size(); ++i) {
+                out_file << i << "," << occupancy_log[i] << "\n";
+            }
+            out_file.close();
         }
-        out_file.close();
-        std::cout << "Log salvo em " << filename << "\n";
     }
 
-    // Destruição dos semáforos
     sem_destroy(&sem_empty);
     sem_destroy(&sem_full);
     sem_destroy(&sem_mutex);
