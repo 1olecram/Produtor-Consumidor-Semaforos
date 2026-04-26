@@ -1,4 +1,4 @@
-# TP1: Produtor-Consumidor com Semáforos
+# Produtor-Consumidor com Semáforos
 
 Este projeto implementa o clássico problema Produtor-Consumidor em ambiente multithreaded na linguagem C++ utilizando exclusão mútua e coordenação de fluxo com semáforos POSIX (`semaphore.h`).
 
